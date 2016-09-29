@@ -93,7 +93,9 @@ class SeminarRecorder:
         '''
         return ISO time suited for path  
         '''
-        stime = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S') #pylint: disable=E1101
+        now = datetime.datetime.now()  #pylint: disable=E1101
+        millis = now.microsecond/1000
+        stime = now.strftime('%Y-%m-%d-%H-%M-%S') + '-' + "%03d" % millis 
         return stime
 
     def print_status_line(self):
