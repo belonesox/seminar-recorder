@@ -121,9 +121,9 @@ class SeminarRecorder:
         for video in set(self.webcamgrabbers.keys()).intersection(self.potential_webcams.keys()):
             webcamsize = 'NA'
             fname = self.webcamgrabbers[video].filename
-            if self.potential_webcams[video].find('DVC')>=0:
+            if self.potential_webcams[video].find('DVC') >= 0:
                 fname = self.get_mru_file4ext('-' + video)
-            if self.potential_webcams[video].find('HDV')>=0:
+            if self.potential_webcams[video].find('HDV') >= 0:
                 fname = self.get_mru_file4ext('-firewire')
 
             if fname and os.path.exists(fname):
@@ -197,18 +197,37 @@ class SeminarRecorder:
 
 
     def start_webcam_record(self,  video):
+        '''
+    Actually now hardcoded to Microsoft LifeCam 
+        '''    
         if video == 'DV':
             return self.start_firewire_record()
         videodevname = r'/dev/' + video
+
         if os.path.exists(videodevname):
             webname = self.potential_webcams[video]
-            if webname.find('DVC')>=0:
+            if webname.find('DVC') >= 0:
                 return self.start_dvusb_record(video)
             # scmd =( 'ffmpeg -f video4linux2 -list_formats all '
             #         ' -i %(videodevname)s   ' % vars() )
             # sres = self.get_out_from_cmd(scmd)
             # if not 'mjpeg' in sres:
             #     return
+
+            webblock_in_seconds = 60*60
+            numbuffersv = webblock_in_seconds*10
+            numbuffersa = webblock_in_seconds*100
+            audioblock = ' \ '
+            sout = self.get_out_from_cmd('arecord -l')
+            mre = re.search('card (?P<card>\d+): CinemaTM', sout)
+            if mre:
+                cardnum = mre.groups('card')[0]
+                audioblock = r'''
+alsasrc device="hw:%(cardnum)s,0" num-buffers=%(numbuffersa)d   \
+  ! queue ! audioconvert ! queue \
+ !  mux. \
+''' % vars()
+
 
             stime = self.iso_time()
             webcamfilename = "-".join([stime, video]) + '.avi'
@@ -226,7 +245,7 @@ class SeminarRecorder:
 #      ! queue max-size-bytes=200000 \
 #      !  avimux  name=mux \
        avimux name=mux \
-  v4l2src device=%(videodevname)s do-timestamp=1 num-buffers=18000 \
+  v4l2src device=%(videodevname)s do-timestamp=1 num-buffers=%(numbuffersv)d \
 #  v4l2src device=%(videodevname)s \
 #      !  'image/jpeg,width=1280,framerate=10/1,rate=10' \
       !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
@@ -236,13 +255,28 @@ class SeminarRecorder:
      !  stamp sync-margin=2 sync-interval=1 \
      ! queue max-size-bytes=2000000 \
      !  mux. \
+%(audioblock)s
 #     !  fakesink \
     mux. \
      !  filesink location=%(webcamfilename)s \
-'''
+''' % vars()
             scmd = strip_gst_comments(gst_code) % vars()
             print scmd
 
+            playtest = '''
+gst-launch-1.0   \
+  v4l2src device=/dev/video0 do-timestamp=1 num-buffers=3000 \
+      !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
+     ! queue max-size-bytes=2000000 \
+     !  stamp sync-margin=2 sync-interval=1 \
+     ! queue max-size-bytes=2000000 \
+      !  avimux  name=mux \
+        alsasrc device="hw:3,0" num-buffers=30000  \
+      ! queue ! audioconvert ! queue \
+     !  mux. \
+    mux. \
+     !  filesink location=test-mjpeg-with-audio.avi
+'''
             
             #gst-launch-1.0   v4l2src device=/dev/video0 !  'image/jpeg,width=1280,framerate=10/1,rate=10' ! avimux ! filesink location=2014-10-16-17-10-53-video0.avi 
 
@@ -263,7 +297,7 @@ class SeminarRecorder:
 
     def start_dvusb_record(self, video):
         def get_firewire_filename():
-            stime = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+            stime = self.iso_time()
             faviname = "-".join([stime, video]) + '.dv'
             firstchunkname = "-".join([stime, 'dv001']) + '.dv'
             return faviname, firstchunkname
@@ -374,12 +408,12 @@ def main():
         recordpath = sys.argv[1]
 
     semrec = SeminarRecorder()
-    os.setpgrp()
+    #os.setpgrp()
     try:
         semrec.start_recording(recordpath)
     finally:
         semrec.shutdown_webcams()
-        os.killpg(0, signal.SIGKILL) 
+        #os.killpg(0, signal.SIGKILL) 
 
 
 if __name__ == '__main__':
