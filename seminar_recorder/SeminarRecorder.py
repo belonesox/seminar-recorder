@@ -14,6 +14,18 @@ import signal
 import socket
 import belonesox_tools.MiscUtils as ut
 
+
+def strip_gst_comments(scmd):
+    '''
+     Remove #comments from multiline GST magic
+    ''' 
+    scmd = re.sub(r'(?m)^#[^\n]*\n', "", scmd)
+    scmd = re.sub(r'(?m)(?P<repl>[^\\])#[^\n]*\n', r'\1\n', scmd)
+    scmd = re.sub(r'[\s]+\n', r'\n', scmd  )
+    return scmd
+
+
+
 class RecordingProcess(object):
     def __init__(self, process, filename):
         '''
@@ -50,7 +62,6 @@ class SeminarRecorder:
         self.recorddir = None
         self.translated_file = None
         self.webcamgrabbers = None
-        self.dv_ext = '.dv'
 
         self.logdir = os.path.join(os.getenv("HOME"),
                                    'SparkleShare/seminar_recording_logs')
@@ -61,7 +72,22 @@ class SeminarRecorder:
         logname = '-'.join([socket.gethostname(), stime]) + '.log'
         self.logfilename = os.path.join(self.logdir, logname)
         self.loglines = []
-        self.potential_webcams = ['DV', 'video4', 'video3', 'video2', 'video1', 'video0']
+        self.reload_potential_webcams()
+        pass
+        
+        
+        
+    def reload_potential_webcams(self):
+        sout = self.get_out_from_cmd('v4l2-ctl --list-devices')
+        lines = sout.split('\n')
+        self.potential_webcams  = {}
+        self.potential_webcams['DV']  = 'HDV'
+        for i in xrange(len(lines)/3):
+            name = lines[i*3]
+            devvideo = lines[3*i+1].strip().replace(r'/dev/', '')
+            if name.find('LifeCam')>0 or name.find('DVC')>=0:
+                self.potential_webcams[devvideo] = name
+        pass         
 
     def iso_time(self):
         '''
@@ -74,24 +100,34 @@ class SeminarRecorder:
         '''
         Print log line, using state of recording files. 
         ''' 
+
+        def size4file(filename):
+            filesize = str(os.stat(filename).st_size/1024/1024) + 'M'
+            return filesize
+        
         stime = self.iso_time()
         terms = [stime, '> ']
-        dvsize = 'NA'
-        mru_dv_file = self.get_mru_file4ext('-dv')
-        if mru_dv_file and os.path.exists(mru_dv_file):
-            dvsize = str(os.stat(mru_dv_file).st_size/1024/1024) + 'M'
-            terms += ['DV=', dvsize, '    ']
-            if 'DV' in self.filesize:
-                if self.filesize['DV'] == dvsize:
-                    self.webcamgrabbers['DV'].shutdown()
-                    dvsize = '---'
-                    time.sleep(3)
-            self.filesize['DV'] = dvsize
-        for video in self.webcamgrabbers:
+        # dvsize = 'NA'
+        # mru_dv_file = self.get_mru_file4ext('-firewire')
+        # if mru_dv_file and os.path.exists(mru_dv_file):
+        #     dvsize = size4file(mru_dv_file)
+        #     terms += ['DV=', dvsize, '    ']
+        #     if 'DV' in self.filesize:
+        #         if self.filesize['DV'] == dvsize:
+        #             self.webcamgrabbers['DV'].shutdown()
+        #             dvsize = '---'
+        #             time.sleep(3)
+        #     self.filesize['DV'] = dvsize
+        for video in set(self.webcamgrabbers.keys()).intersection(self.potential_webcams.keys()):
             webcamsize = 'NA'
             fname = self.webcamgrabbers[video].filename
-            if os.path.exists(fname):
-                webcamsize = str(os.stat(fname).st_size/1024/1024) + 'M'
+            if self.potential_webcams[video].find('DVC')>=0:
+                fname = self.get_mru_file4ext('-' + video)
+            if self.potential_webcams[video].find('HDV')>=0:
+                fname = self.get_mru_file4ext('-firewire')
+
+            if fname and os.path.exists(fname):
+                webcamsize = size4file(fname)
                 terms += [' %(video)s=' % vars(), webcamsize]
                 if video in self.filesize:
                     if self.filesize[video] == webcamsize:
@@ -118,29 +154,6 @@ class SeminarRecorder:
         progout.close()
 
         return sresult
-
-
-
-    def get_duration(self, filename):
-        """
-        Measure length of audio or movie file using ``ffmpeg``.
-        """
-        scmd = 'ffmpeg -i "' + filename + '"'
-        progin, progout = os.popen4(scmd)
-        self.info = progout.read()
-
-        print self.info
-        progin.close()
-        progout.close()
-
-        reg = re.compile(
-            r"(?sm)Duration: (?P<duration>(?P<hours>\d\d):(?P<minutes>\d\d):(?P<seconds>\d\d.?\d?\d?)),"
-                        )
-        m = reg.search(self.info)
-        if m:
-            duration = m.group("duration")
-            return duration
-        return None
 
     def get_mru_file4ext(self, suffix):
         avilist = [f for f in os.listdir('.')
@@ -188,31 +201,48 @@ class SeminarRecorder:
             return self.start_firewire_record()
         videodevname = r'/dev/' + video
         if os.path.exists(videodevname):
-            scmd =( 'ffmpeg -f video4linux2 -list_formats all '
-                    ' -i %(videodevname)s   ' % vars() )
-            sres = self.get_out_from_cmd(scmd)
-            if not 'mjpeg' in sres:
-                return
+            webname = self.potential_webcams[video]
+            if webname.find('DVC')>=0:
+                return self.start_dvusb_record(video)
+            # scmd =( 'ffmpeg -f video4linux2 -list_formats all '
+            #         ' -i %(videodevname)s   ' % vars() )
+            # sres = self.get_out_from_cmd(scmd)
+            # if not 'mjpeg' in sres:
+            #     return
 
-            stime = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+            stime = self.iso_time()
             webcamfilename = "-".join([stime, video]) + '.avi'
-            scmd =( 'ffmpeg -y '
-                    ' -f alsa  -i default -itsoffset 00:00:00 '
-                    ' -f video4linux2 '
-                    ' -input_format mjpeg '
-                    ' -s 1280x720 '
-                    ' -i %(videodevname)s   '
-                    ' -c copy '
-                    ' %(webcamfilename)s  ' % vars() )
 
-            scmd =( 'gst-launch-1.0  '
-                    " v4l2src device=%(videodevname)s do-timestamp=1 num-buffers=150000 ! "
-                    " 'image/jpeg,width=1280,framerate=10/1,rate=10' ! "
-                    " stamp sync-margin=2 sync-interval=5 ! queue ! "
-                    " avimux name=mux  "
-                    " pulsesrc ! audioconvert ! lamemp3enc target=bitrate bitrate=192 cbr=true ! mux. mux. "
-                    " ! filesink location=%(webcamfilename)s "
-                    % vars() )
+            gst_code = r'''gst-launch-1.0   \
+#    audiotestsrc \
+#alsasrc \
+#      ! audio/x-raw, rate=16000, channels=1 \
+#      ! audioconvert \
+#      ! 'audio/x-raw, rate=16000, channels=1' \       
+#     ! queue  \
+#     ! audioresample \
+#     ! audio/x-raw,rate=16000,channels=1 \
+#     ! queue  \
+#      ! queue max-size-bytes=200000 \
+#      !  avimux  name=mux \
+       avimux name=mux \
+  v4l2src device=%(videodevname)s do-timestamp=1 num-buffers=18000 \
+#  v4l2src device=%(videodevname)s \
+#      !  'image/jpeg,width=1280,framerate=10/1,rate=10' \
+      !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
+# videotestsrc \
+#     ! video/x-raw, framerate=10/1, width=1280, height=720 \
+     ! queue max-size-bytes=2000000 \
+     !  stamp sync-margin=2 sync-interval=1 \
+     ! queue max-size-bytes=2000000 \
+     !  mux. \
+#     !  fakesink \
+    mux. \
+     !  filesink location=%(webcamfilename)s \
+'''
+            scmd = strip_gst_comments(gst_code) % vars()
+            print scmd
+
             
             #gst-launch-1.0   v4l2src device=/dev/video0 !  'image/jpeg,width=1280,framerate=10/1,rate=10' ! avimux ! filesink location=2014-10-16-17-10-53-video0.avi 
 
@@ -231,19 +261,18 @@ class SeminarRecorder:
         pass
 
 
-    def start_firewire_record(self):
+    def start_dvusb_record(self, video):
         def get_firewire_filename():
             stime = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-            faviname = "-".join([stime, 'dv']) + self.dv_ext
-            firstchunkname = "-".join([stime, 'dv001']) + self.dv_ext
+            faviname = "-".join([stime, video]) + '.dv'
+            firstchunkname = "-".join([stime, 'dv001']) + '.dv'
             return faviname, firstchunkname
             pass
 
-        self.dv_ext = '.m2t'
         fname, firstchunkname = get_firewire_filename()
-        scmd = "dvgrab -buffers 300 -noavc -a -size 12000 -f hdv " + fname
+        scmd = "dvgrab -V -buffers 300 -noavc -a -size 24000 -V -input /dev/%(video)s  " % vars() + fname
 
-        slog = open("dvgrab.log", "w")
+        slog = open("dvgrab-%(video)s.log" % vars(), "w")
         process_ = subprocess.Popen(scmd, shell=True, stdout=slog)
         slog.close()
 
@@ -257,20 +286,25 @@ class SeminarRecorder:
                 return False
             return True
 
-        time.sleep(1)
-        if not file_is_ok(firstchunkname):
-            try:
-                os.kill(process_.pid, signal.SIGINT)
-            except:
-                pass
+        self.webcamgrabbers[video] = RecordingProcess(process_, fname)
 
-            self.dv_ext = '.dv'
-            fname, firstchunkname = get_firewire_filename()
-            scmd = "dvgrab -buffers 500 -noavc -a -size 24000 " + fname
+    def start_firewire_record(self):
+        '''
+        Start 
+        '''
+        def get_firewire_filename():
+            stime = self.iso_time()
+            fname = "-".join([stime, 'firewire-']) 
+            #firstchunkname = "-".join([stime, 'dv001']) + self.dv_ext
+            return fname
+            pass
 
-            slog = open("dvgrab.log", "w")
-            process_ = subprocess.Popen(scmd, shell=True, stdout=slog)
-            slog.close()
+        fname = get_firewire_filename()
+        scmd = "dvgrab -buffers 600 -a -size 48000  " + fname
+
+        slog = open("dvgrab.log", "w")
+        process_ = subprocess.Popen(scmd, shell=True, stdout=slog)
+        slog.close()
 
         self.webcamgrabbers['DV'] = RecordingProcess(process_, fname)
 
@@ -318,7 +352,6 @@ class SeminarRecorder:
         self.webcamgrabbers = {}
 
         try:
-            ptran = None
             while True:
                 self.activate_input_sources()
                 self.print_status_line()
@@ -341,6 +374,7 @@ def main():
         recordpath = sys.argv[1]
 
     semrec = SeminarRecorder()
+    os.setpgrp()
     try:
         semrec.start_recording(recordpath)
     finally:
