@@ -216,16 +216,25 @@ class SeminarRecorder:
             # if not 'mjpeg' in sres:
             #     return
 
-            webblock_in_seconds = 60*60
+            webblock_in_seconds = 60*60*10
             numbuffersv = webblock_in_seconds*10
             numbuffersa = webblock_in_seconds*100
+
+            numbuffersa_block = ''
+            if numbuffersa > 0:
+                numbuffersa_block = 'num-buffers=%(numbuffersa)d' % vars()
+
+            numbuffersv_block = ''
+            if numbuffersv > 0:
+                numbuffersv_block = 'num-buffers=%(numbuffersv)d' % vars()
+
             audioblock = ' \ '
             sout = self.get_out_from_cmd('arecord -l')
             mre = re.search('card (?P<card>\d+): CinemaTM', sout)
             if mre:
                 cardnum = mre.groups('card')[0]
                 audioblock = r'''
-alsasrc device="hw:%(cardnum)s,0" num-buffers=%(numbuffersa)d   \
+alsasrc device="hw:%(cardnum)s,0" %(numbuffersa_block)s   \
   ! queue ! audioconvert ! queue \
  !  mux. \
 ''' % vars()
@@ -235,24 +244,9 @@ alsasrc device="hw:%(cardnum)s,0" num-buffers=%(numbuffersa)d   \
             webcamfilename = "-".join([stime, video]) + '.avi'
 
             gst_code = r'''gst-launch-1.0   \
-#    audiotestsrc \
-#alsasrc \
-#      ! audio/x-raw, rate=16000, channels=1 \
-#      ! audioconvert \
-#      ! 'audio/x-raw, rate=16000, channels=1' \       
-#     ! queue  \
-#     ! audioresample \
-#     ! audio/x-raw,rate=16000,channels=1 \
-#     ! queue  \
-#      ! queue max-size-bytes=200000 \
-#      !  avimux  name=mux \
        avimux name=mux \
-  v4l2src device=%(videodevname)s do-timestamp=1 num-buffers=%(numbuffersv)d \
-#  v4l2src device=%(videodevname)s \
-#      !  'image/jpeg,width=1280,framerate=10/1,rate=10' \
+  v4l2src device=%(videodevname)s do-timestamp=1 %(numbuffersv_block)s \
       !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
-# videotestsrc \
-#     ! video/x-raw, framerate=10/1, width=1280, height=720 \
      ! queue max-size-bytes=2000000 \
      !  stamp sync-margin=2 sync-interval=1 \
      ! queue max-size-bytes=2000000 \
@@ -265,20 +259,20 @@ alsasrc device="hw:%(cardnum)s,0" num-buffers=%(numbuffersa)d   \
             scmd = strip_gst_comments(gst_code) % vars()
             print scmd
 
-            playtest = '''
-gst-launch-1.0   \
-  v4l2src device=/dev/video0 do-timestamp=1 num-buffers=3000 \
-      !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
-     ! queue max-size-bytes=2000000 \
-     !  stamp sync-margin=2 sync-interval=1 \
-     ! queue max-size-bytes=2000000 \
-      !  avimux  name=mux \
-        alsasrc device="hw:3,0" num-buffers=30000  \
-      ! queue ! audioconvert ! queue \
-     !  mux. \
-    mux. \
-     !  filesink location=test-mjpeg-with-audio.avi
-'''
+#             playtest = '''
+# gst-launch-1.0   \
+#   v4l2src device=/dev/video0 do-timestamp=1 num-buffers=3000 \
+#       !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
+#      ! queue max-size-bytes=2000000 \
+#      !  stamp sync-margin=2 sync-interval=1 \
+#      ! queue max-size-bytes=2000000 \
+#       !  avimux  name=mux \
+#         alsasrc device="hw:3,0" num-buffers=30000  \
+#       ! queue ! audioconvert ! queue \
+#      !  mux. \
+#     mux. \
+#      !  filesink location=test-mjpeg-with-audio.avi
+# '''
             
             #gst-launch-1.0   v4l2src device=/dev/video0 !  'image/jpeg,width=1280,framerate=10/1,rate=10' ! avimux ! filesink location=2014-10-16-17-10-53-video0.avi 
 
