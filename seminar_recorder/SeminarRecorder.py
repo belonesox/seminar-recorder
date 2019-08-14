@@ -13,6 +13,7 @@ import re
 import signal
 import socket
 import belonesox_tools.MiscUtils as ut
+from collections import OrderedDict
 
 
 def strip_gst_comments(scmd):
@@ -80,13 +81,17 @@ class SeminarRecorder:
     def reload_potential_webcams(self):
         sout = self.get_out_from_cmd('v4l2-ctl --list-devices')
         lines = sout.split('\n')
-        self.potential_webcams  = {}
-        self.potential_webcams['DV']  = 'HDV'
+        self.potential_mscams  = OrderedDict()
+        self.potential_dvcams  = []
+        self.potential_hdvcams = ['HDV']
         for i in xrange(len(lines)/3):
             name = lines[i*3]
             devvideo = lines[3*i+1].strip().replace(r'/dev/', '')
-            if name.find('LifeCam')>0 or name.find('DVC')>=0:
-                self.potential_webcams[devvideo] = name
+            if name.find('LifeCam') > 0:
+                self.potential_mscams[devvideo] = name
+            if name.find('DVC') >= 0:
+                self.potential_dvcams.append(devvideo)
+            #todo перебор по firewire, для нескольких firewire.
         pass         
 
     def iso_time(self):
@@ -109,23 +114,13 @@ class SeminarRecorder:
         
         stime = self.iso_time()
         terms = [stime, '> ']
-        # dvsize = 'NA'
-        # mru_dv_file = self.get_mru_file4ext('-firewire')
-        # if mru_dv_file and os.path.exists(mru_dv_file):
-        #     dvsize = size4file(mru_dv_file)
-        #     terms += ['DV=', dvsize, '    ']
-        #     if 'DV' in self.filesize:
-        #         if self.filesize['DV'] == dvsize:
-        #             self.webcamgrabbers['DV'].shutdown()
-        #             dvsize = '---'
-        #             time.sleep(3)
-        #     self.filesize['DV'] = dvsize
-        for video in set(self.webcamgrabbers.keys()).intersection(self.potential_webcams.keys()):
+        for video in set(self.webcamgrabbers.keys()).intersection(
+                    set(self.potential_mscams.keys()) | set(self.potential_dvcams) | set(self.potential_hdvcams)):
             webcamsize = 'NA'
             fname = self.webcamgrabbers[video].filename
-            if self.potential_webcams[video].find('DVC') >= 0:
+            if video in self.potential_dvcams:
                 fname = self.get_mru_file4ext('-' + video)
-            if self.potential_webcams[video].find('HDV') >= 0:
+            if video == 'HDV':
                 fname = self.get_mru_file4ext('-firewire')
 
             if fname and os.path.exists(fname):
@@ -180,17 +175,28 @@ class SeminarRecorder:
             self.webcamgrabbers[video].shutdown()
 
     def activate_input_sources(self):
-        for video in self.potential_webcams:
+        def check_and_restart(video, start_record):
             if video in self.webcamgrabbers:
                 pr = self.webcamgrabbers[video].process.poll()
                 if not (pr == None):
                     self.webcamgrabbers[video].shutdown
                     del self.webcamgrabbers[video]
-                    self.start_webcam_record(video)
+                    start_record(video)
             else:
-                self.start_webcam_record(video)
+                start_record(video)
+            pass
+
+        for video in self.potential_hdvcams:
+            check_and_restart(video, self.start_firewire_record)
+                    
+        for video in self.potential_mscams:
+            check_and_restart(video, self.start_mscam_record)
+
+        for video in self.potential_dvcams:
+            check_and_restart(video, self.start_dvusb_record)
 
         exist_live = False
+
         for video in self.webcamgrabbers:
             pr = self.webcamgrabbers[video].process.poll()
             if pr == None:
@@ -198,18 +204,14 @@ class SeminarRecorder:
         return exist_live
 
 
-    def start_webcam_record(self,  video):
+    def start_mscam_record(self,  video):
         '''
-    Actually now hardcoded to Microsoft LifeCam 
+            Actually now hardcoded to Microsoft LifeCam 
         '''    
-        if video == 'DV':
-            return self.start_firewire_record()
         videodevname = r'/dev/' + video
 
         if os.path.exists(videodevname):
-            webname = self.potential_webcams[video]
-            if webname.find('DVC') >= 0:
-                return self.start_dvusb_record(video)
+            webname = self.potential_mscams[video]
             # scmd =( 'ffmpeg -f video4linux2 -list_formats all '
             #         ' -i %(videodevname)s   ' % vars() )
             # sres = self.get_out_from_cmd(scmd)
@@ -230,9 +232,23 @@ class SeminarRecorder:
 
             audioblock = ' \ '
             sout = self.get_out_from_cmd('arecord -l')
-            mre = re.search('card (?P<card>\d+): CinemaTM', sout)
-            if mre:
+            firstname = webname.split(':')[0].replace("(", "\(").replace(")", "\)")
+            sre_ = 'card (?P<card>\d+): CinemaTM[\w]* \[%(firstname)s\]' % vars()
+            audiore_ = re.compile(sre_)
+            # mre = re.search('card (?P<card>\d+): CinemaTM[\w]*\[%(webname)s\]' % vars(), sout)
+            cardnums = []
+            cardnum = None
+            for mre in audiore_.finditer(sout):
                 cardnum = mre.groups('card')[0]
+                cardnums.append(cardnum)
+
+            #теперь нужна эвристика, заматчить аудиовход вебкамеры на видеовход вебкамеры
+            for k, v in enumerate(self.potential_mscams):
+                if v == video:
+                    cardnum = cardnums[k]
+                    break
+
+            if cardnum:
                 audioblock = r'''
 alsasrc device="hw:%(cardnum)s,0" %(numbuffersa_block)s   \
   ! queue ! audioconvert ! queue \
@@ -241,10 +257,10 @@ alsasrc device="hw:%(cardnum)s,0" %(numbuffersa_block)s   \
 
 
             stime = self.iso_time()
-            webcamfilename = "-".join([stime, video]) + '.avi'
+            webcamfilename = "-".join([stime, video]) + '.mkv'
 
             gst_code = r'''gst-launch-1.0   \
-       avimux name=mux \
+       matroskamux name=mux \
   v4l2src device=%(videodevname)s do-timestamp=1 %(numbuffersv_block)s \
       !  'image/jpeg, width=1280, framerate=(fraction)10/1'  \
      ! queue max-size-bytes=2000000 \
@@ -318,7 +334,7 @@ alsasrc device="hw:%(cardnum)s,0" %(numbuffersa_block)s   \
 
         self.webcamgrabbers[video] = RecordingProcess(process_, fname)
 
-    def start_firewire_record(self):
+    def start_firewire_record(self, video=None):
         '''
         Start 
         '''
