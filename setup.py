@@ -12,7 +12,7 @@ setup(
         ],
     },
     name='seminar_recorder',
-    version='1.4',
+    version='1.5',
     packages=['seminar_recorder'],
     author_email = "stanislav.fomin@gmail.com",
 

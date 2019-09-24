@@ -83,7 +83,7 @@ class SeminarRecorder:
         lines = sout.split('\n')
         self.potential_mscams  = OrderedDict()
         self.potential_dvcams  = []
-        self.potential_hdvcams = ['HDV']
+        self.potential_hdvcams = []
         for i in xrange(len(lines)/3):
             name = lines[i*3]
             devvideo = lines[3*i+1].strip().replace(r'/dev/', '')
@@ -92,6 +92,16 @@ class SeminarRecorder:
             if name.find('DVC') >= 0:
                 self.potential_dvcams.append(devvideo)
             #todo перебор по firewire, для нескольких firewire.
+        firewire_dir = '/sys/bus/firewire/devices'   
+        for dev in os.listdir(firewire_dir):
+            vendor_ = os.path.join(firewire_dir, dev, 'vendor_name')
+            if os.path.exists(vendor_):
+                vendor_name = ut.file2string(vendor_).strip()
+                if vendor_name in ['Canon']:
+                    guid = ut.file2string(os.path.join(firewire_dir, dev, 'guid')).strip()
+                    self.potential_hdvcams.append('hdv-' + guid)
+
+
         pass         
 
     def iso_time(self):
@@ -120,8 +130,8 @@ class SeminarRecorder:
             fname = self.webcamgrabbers[video].filename
             if video in self.potential_dvcams:
                 fname = self.get_mru_file4ext('-' + video)
-            if video == 'HDV':
-                fname = self.get_mru_file4ext('-firewire')
+            if video in self.potential_hdvcams:
+                fname = self.get_mru_file4ext(video + '-firewire')
 
             if fname and os.path.exists(fname):
                 webcamsize = size4file(fname)
@@ -334,25 +344,28 @@ alsasrc device="hw:%(cardnum)s,0" %(numbuffersa_block)s   \
 
         self.webcamgrabbers[video] = RecordingProcess(process_, fname)
 
-    def start_firewire_record(self, video=None):
+    def start_firewire_record(self, video=''):
         '''
         Start 
         '''
         def get_firewire_filename():
             stime = self.iso_time()
-            fname = "-".join([stime, 'firewire-']) 
+            fname = "-".join([stime, video, 'firewire-']) 
             #firstchunkname = "-".join([stime, 'dv001']) + self.dv_ext
             return fname
             pass
 
+        guid_mod = ''
+        if video:
+            guid_ = video.split('-')[-1]
+            guid_mod = ' -guid ' + guid_
         fname = get_firewire_filename()
-        scmd = "dvgrab -buffers 600 -a -size 48000  " + fname
-
+        scmd = 'dvgrab -buffers 600 %(guid_mod)s -a -size 48000 "%(fname)s" ' % vars()
         slog = open("dvgrab.log", "w")
         process_ = subprocess.Popen(scmd, shell=True, stdout=slog)
         slog.close()
 
-        self.webcamgrabbers['DV'] = RecordingProcess(process_, fname)
+        self.webcamgrabbers[video] = RecordingProcess(process_, fname)
 
 
     def start_recording(self, recordpath):
