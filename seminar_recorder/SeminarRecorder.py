@@ -12,6 +12,7 @@ import datetime
 import re
 import signal
 import socket
+import glob
 import belonesox_tools.MiscUtils as ut
 from collections import OrderedDict
 
@@ -81,14 +82,33 @@ class SeminarRecorder:
     def reload_potential_webcams(self):
         sout = self.get_out_from_cmd('v4l2-ctl --list-devices')
         lines = sout.split('\n')
+        sre_ = r"(?P<uc1>\d\d\d\d):(?P<uc2>\d\d):(?P<uc3>\dd)\.\d-(?P<uc4>\d\.\d)\):"    
+        usb_parse_re = re.compile(sre_)
         self.potential_mscams  = OrderedDict()
         self.potential_dvcams  = []
         self.potential_hdvcams = ['HDV']
         for i in xrange(len(lines)/3):
-            name = lines[i*3]
             devvideo = lines[3*i+1].strip().replace(r'/dev/', '')
+            name = lines[i*3]
             if name.find('LifeCam') > 0:
-                self.potential_mscams[devvideo] = name
+                terms = name.split("usb-")
+                if len(terms) < 2:
+                    continue
+                _, usbcode = terms[:2]
+                for mre in usb_parse_re.finditer(usbcode):
+                    uc1 = mre.group('uc1')
+                    uc2 = mre.group('uc2')
+                    uc3 = mre.group('uc3')
+                    uc4 = mre.group('uc4')
+                    audio_dev_path_glob = ('/sys/devices/pci0000:00/'
+                                      '%(uc1)s:%(uc2)s:%(uc3)s.0/'
+                                      'usb2/2-1/2-%(uc4)s/2-%(uc4)s:'
+                                      '1.2/sound/card*/id') % vars()
+                    for fname_ in glob.glob(audio_dev_path_glob):                  
+                        print fname_
+                        audio_dev_name = ut.file2string(fname_).strip()
+                        self.potential_mscams[devvideo] = audio_dev_name
+                        break
             if name.find('DVC') >= 0:
                 self.potential_dvcams.append(devvideo)
             #todo перебор по firewire, для нескольких firewire.
@@ -212,6 +232,7 @@ class SeminarRecorder:
 
         if os.path.exists(videodevname):
             webname = self.potential_mscams[video]
+            print webname
             # scmd =( 'ffmpeg -f video4linux2 -list_formats all '
             #         ' -i %(videodevname)s   ' % vars() )
             # sres = self.get_out_from_cmd(scmd)
@@ -233,20 +254,15 @@ class SeminarRecorder:
             audioblock = ' \ '
             sout = self.get_out_from_cmd('arecord -l')
             firstname = webname.split(':')[0].replace("(", "\(").replace(")", "\)")
-            sre_ = 'card (?P<card>\d+): CinemaTM[\w]* \[%(firstname)s\]' % vars()
+            sre_ = 'card (?P<card>\d+): %(webname)s .*' % vars()
+            print sre_
             audiore_ = re.compile(sre_)
             # mre = re.search('card (?P<card>\d+): CinemaTM[\w]*\[%(webname)s\]' % vars(), sout)
             cardnums = []
             cardnum = None
             for mre in audiore_.finditer(sout):
                 cardnum = mre.groups('card')[0]
-                cardnums.append(cardnum)
-
-            #теперь нужна эвристика, заматчить аудиовход вебкамеры на видеовход вебкамеры
-            for k, v in enumerate(self.potential_mscams):
-                if v == video:
-                    cardnum = cardnums[k]
-                    break
+                break
 
             if cardnum:
                 audioblock = r'''
@@ -298,12 +314,14 @@ alsasrc device="hw:%(cardnum)s,0" %(numbuffersa_block)s   \
             rp = RecordingProcess(pid, webcamfilename)
             self.webcamgrabbers[video] = rp
             slog.close()
+            #  cat /sys/kernel/debug/usb/devices | grep "B: "
+            
             #time.sleep(5)
-            absfilename = os.path.realpath(webcamfilename)
-            print absfilename
-            scmd = 'ffplay -ss 24:00:00 -r 1 %(absfilename)s' % vars()
-            print scmd
-            #break
+            # absfilename = os.path.realpath(webcamfilename)
+            # print absfilename
+            # scmd = 'ffplay -ss 24:00:00 -r 1 %(absfilename)s' % vars()
+            # print scmd
+            # #break
         pass
 
 
