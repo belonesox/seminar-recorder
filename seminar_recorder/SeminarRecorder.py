@@ -81,8 +81,9 @@ class SeminarRecorder:
         
     def reload_potential_webcams(self):
         sout = self.get_out_from_cmd('v4l2-ctl --list-devices')
+        print sout
         lines = sout.split('\n')
-        sre_ = r"(?P<uc1>\d\d\d\d):(?P<uc2>\d\d):(?P<uc3>\dd)\.\d-(?P<uc4>\d\.\d)\):"    
+        sre_ = r"(?P<uc1>\d\d\d\d):(?P<uc2>\d\d):(?P<uc3>\d\w)\.(?P<uc31>\d)-(?P<uc4>\d(\.\d)?)\):"    
         usb_parse_re = re.compile(sre_)
         self.potential_mscams  = OrderedDict()
         self.potential_dvcams  = []
@@ -95,15 +96,19 @@ class SeminarRecorder:
                 if len(terms) < 2:
                     continue
                 _, usbcode = terms[:2]
+                print usbcode
                 for mre in usb_parse_re.finditer(usbcode):
+                    print usbcode
                     uc1 = mre.group('uc1')
                     uc2 = mre.group('uc2')
                     uc3 = mre.group('uc3')
+                    uc31 = mre.group('uc31')
                     uc4 = mre.group('uc4')
                     audio_dev_path_glob = ('/sys/devices/pci0000:00/'
-                                      '%(uc1)s:%(uc2)s:%(uc3)s.0/'
-                                      'usb2/2-1/2-%(uc4)s/2-%(uc4)s:'
+                                      '%(uc1)s:%(uc2)s:%(uc3)s.%(uc31)s/'
+                                      'usb*/*-%(uc4)s/*-%(uc4)s:'
                                       '1.2/sound/card*/id') % vars()
+                    print audio_dev_path_glob                        
                     for fname_ in glob.glob(audio_dev_path_glob):                  
                         print fname_
                         audio_dev_name = ut.file2string(fname_).strip()
@@ -112,6 +117,8 @@ class SeminarRecorder:
             if name.find('DVC') >= 0:
                 self.potential_dvcams.append(devvideo)
             #todo перебор по firewire, для нескольких firewire.
+
+        #sys.exit(0)    
         pass         
 
     def iso_time(self):
