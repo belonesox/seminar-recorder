@@ -118,7 +118,7 @@ class SeminarRecorder:
             #todo перебор по firewire, для нескольких firewire.
 
         firewire_dir = '/sys/bus/firewire/devices'   
-        if os.path.exist(firewire_dir):
+        if os.path.exists(firewire_dir):
             for dev in os.listdir(firewire_dir):
                 vendor_ = os.path.join(firewire_dir, dev, 'vendor_name')
                 if os.path.exists(vendor_):
